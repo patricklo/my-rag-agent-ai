@@ -1,0 +1,28 @@
+server:
+  port: 8090
+  servlet:
+    context-path: /my-rag-agent-ai
+
+spring:
+  ai:
+    ollama:
+      base-url: http://114.132.178.157:11434
+
+redis:
+  sdk:
+    config:
+      host: 114.132.178.157
+      port: 16379
+      pool-size: 10
+      min-idle-size: 5
+      idle-timeout: 30000
+      connect-timeout: 5000
+      retry-attempts: 3
+      retry-interval: 1000
+      ping-interval: 60000
+      keep-alive: true
+
+logging:
+  level:
+    root: info
+  config: classpath:logback-spring.xml

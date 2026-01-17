@@ -1,0 +1,5 @@
+spring:
+  application:
+    name: my-rag-agent-api
+  profiles:
+    active: dev
