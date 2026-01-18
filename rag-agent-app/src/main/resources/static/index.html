@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 对话助手</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* 自定义滚动条样式 */
+        .chat-container::-webkit-scrollbar {
+            width: 6px;
+        }
+        .chat-container::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 10px;
+        }
+        .chat-container::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 10px;
+        }
+        .chat-container::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+        
+        /* 打字效果 */
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
+        .typing-indicator::after {
+            content: '▋';
+            animation: blink 1s infinite;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen">
+    <div class="container mx-auto max-w-4xl px-4 py-8">
+        <!-- 标题区域 -->
+        <div class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-gray-800 mb-2">AI 对话助手</h1>
+            <p class="text-gray-600">基于 Ollama 的智能对话系统</p>
+        </div>
+
+        <!-- 模型选择区域 -->
+        <div class="bg-white rounded-lg shadow-md p-4 mb-4">
+            <label for="modelInput" class="block text-sm font-medium text-gray-700 mb-2">选择模型:</label>
+            <input 
+                type="text" 
+                id="modelInput" 
+                value="deepseek-r1:1.5b" 
+                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="输入模型名称，例如: deepseek-r1:1.5b"
+            >
+        </div>
+
+        <!-- 聊天消息区域 -->
+        <div class="bg-white rounded-lg shadow-lg mb-4 overflow-hidden">
+            <div id="chatMessages" class="chat-container h-96 overflow-y-auto p-6 space-y-4">
+                <div class="text-center text-gray-500 py-8">
+                    <p>开始对话吧！输入您的问题并点击发送。</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 输入区域 -->
+        <div class="bg-white rounded-lg shadow-md p-4">
+            <div class="flex gap-2">
+                <input 
+                    type="text" 
+                    id="messageInput" 
+                    placeholder="输入您的问题..." 
+                    class="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                    onkeypress="if(event.key === 'Enter') sendMessage()"
+                >
+                <button 
+                    id="sendButton"
+                    onclick="sendMessage()" 
+                    class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors font-medium"
+                >
+                    发送
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE_URL = 'http://localhost:8090/my-rag-agent-ai/api/v1/ollama';
+        let currentEventSource = null;
+        let currentResponseElement = null;
+        let fullContent = '';
+
+        function sendMessage() {
+            const messageInput = document.getElementById('messageInput');
+            const modelInput = document.getElementById('modelInput');
+            const sendButton = document.getElementById('sendButton');
+
+            const message = messageInput.value.trim();
+            const model = modelInput.value.trim() || 'deepseek-r1:1.5b';
+
+            if (!message) {
+                alert('请输入消息内容');
+                return;
+            }
+
+            // 禁用输入和按钮
+            messageInput.disabled = true;
+            sendButton.disabled = true;
+            sendButton.textContent = '发送中...';
+
+            // 关闭之前的连接
+            if (currentEventSource) {
+                currentEventSource.close();
+            }
+
+            // 重置内容
+            fullContent = '';
+
+            // 添加用户消息
+            addUserMessage(message);
+
+            // 创建 AI 响应消息容器
+            currentResponseElement = addAIMessage();
+
+            // 构建 API URL
+            const apiUrl = `${API_BASE_URL}/generate_stream?model=${encodeURIComponent(model)}&message=${encodeURIComponent(message)}`;
+            
+            console.log('请求 URL:', apiUrl);
+            
+            // 直接使用 fetch 进行流式请求（Spring WebFlux Flux 通常返回 JSON 流而不是 SSE）
+            tryFetchStream(apiUrl);
+        }
+
+        // 处理单个响应项
+        function processResponseItem(item) {
+            if (!item) {
+                return;
+            }
+
+            console.log('处理响应项:', item);
+
+            // 处理不同的数据结构 - 根据提供的数据格式，item 可能有 result 字段
+            let result = item.result;
+            
+            // 如果没有 result 字段，可能整个 item 就是结果
+            if (!result) {
+                result = item;
+            }
+
+            // 提取内容
+            if (result && result.output && result.output.content !== undefined && result.output.content !== null) {
+                const content = result.output.content;
+                // content 可能为空字符串，但我们仍然要累积非空内容
+                if (content) {
+                    fullContent += content;
+                    if (currentResponseElement) {
+                        // 移除打字指示器
+                        if (currentResponseElement.classList.contains('typing-indicator')) {
+                            currentResponseElement.classList.remove('typing-indicator');
+                        }
+                        currentResponseElement.textContent = fullContent;
+                        scrollToBottom();
+                    }
+                    console.log('已更新内容，当前长度:', fullContent.length);
+                }
+            }
+
+            // 检查是否结束
+            if (result && result.metadata && result.metadata.finishReason) {
+                const finishReason = result.metadata.finishReason;
+                console.log('检查结束标识:', finishReason);
+                // finishReason 可能是 "STOP" 或 "unknown"
+                if (finishReason === 'STOP' || finishReason === 'unknown') {
+                    if (currentEventSource) {
+                        currentEventSource.close();
+                        currentEventSource = null;
+                    }
+                    resetInput();
+                }
+            }
+        }
+
+        // 使用 fetch 进行流式请求
+        async function tryFetchStream(apiUrl) {
+            try {
+                const response = await fetch(apiUrl);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) {
+                        // 处理最后的 buffer
+                        if (buffer.trim()) {
+                            parseAndProcessChunk(buffer.trim());
+                        }
+                        break;
+                    }
+
+                    buffer += decoder.decode(value, { stream: true });
+                    
+                    // 按行分割处理（Spring WebFlux Flux 通常每行一个 JSON 对象或数组）
+                    const lines = buffer.split('\n');
+                    // 保留最后一行（可能不完整）
+                    buffer = lines.pop() || '';
+
+                    // 处理完整的行
+                    for (const line of lines) {
+                        const trimmedLine = line.trim();
+                        if (trimmedLine) {
+                            parseAndProcessChunk(trimmedLine);
+                        }
+                    }
+                }
+
+                resetInput();
+            } catch (error) {
+                console.error('Fetch 流式请求错误:', error);
+                if (currentResponseElement) {
+                    currentResponseElement.textContent = '❌ 请求失败: ' + error.message;
+                    currentResponseElement.classList.remove('typing-indicator');
+                }
+                resetInput();
+            }
+        }
+
+        // 解析并处理数据块
+        function parseAndProcessChunk(chunk) {
+            try {
+                // 移除 SSE 格式的前缀（如果有）
+                let jsonStr = chunk;
+                if (chunk.startsWith('data: ')) {
+                    jsonStr = chunk.substring(6).trim();
+                }
+                
+                // 尝试解析 JSON
+                const parsed = JSON.parse(jsonStr);
+                
+                // 如果是数组，处理每个元素
+                if (Array.isArray(parsed)) {
+                    parsed.forEach(item => {
+                        processResponseItem(item);
+                    });
+                } else {
+                    // 如果是单个对象
+                    processResponseItem(parsed);
+                }
+            } catch (parseError) {
+                // 解析失败，可能是分块的 JSON，记录日志但不中断
+                console.warn('解析 JSON 失败，可能是分块数据:', chunk.substring(0, 100), parseError.message);
+            }
+        }
+
+        function addUserMessage(message) {
+            const chatMessages = document.getElementById('chatMessages');
+            // 清除初始提示
+            if (chatMessages.children.length === 1 && chatMessages.children[0].classList.contains('text-center')) {
+                chatMessages.innerHTML = '';
+            }
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'flex justify-end';
+            messageDiv.innerHTML = `
+                <div class="max-w-[80%] bg-blue-600 text-white rounded-lg px-4 py-2 shadow-sm">
+                    <p class="whitespace-pre-wrap">${escapeHtml(message)}</p>
+                </div>
+            `;
+            chatMessages.appendChild(messageDiv);
+            scrollToBottom();
+        }
+
+        function addAIMessage() {
+            const chatMessages = document.getElementById('chatMessages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'flex justify-start';
+            messageDiv.innerHTML = `
+                <div class="max-w-[80%] bg-gray-100 text-gray-800 rounded-lg px-4 py-2 shadow-sm">
+                    <p class="whitespace-pre-wrap typing-indicator"></p>
+                </div>
+            `;
+            chatMessages.appendChild(messageDiv);
+            scrollToBottom();
+            
+            // 返回文本元素，以便更新内容
+            return messageDiv.querySelector('p');
+        }
+
+        function resetInput() {
+            const messageInput = document.getElementById('messageInput');
+            const sendButton = document.getElementById('sendButton');
+            
+            messageInput.disabled = false;
+            sendButton.disabled = false;
+            sendButton.textContent = '发送';
+            messageInput.value = '';
+            messageInput.focus();
+            
+            // 移除打字指示器
+            if (currentResponseElement && currentResponseElement.classList.contains('typing-indicator')) {
+                currentResponseElement.classList.remove('typing-indicator');
+            }
+        }
+
+        function scrollToBottom() {
+            const chatMessages = document.getElementById('chatMessages');
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
