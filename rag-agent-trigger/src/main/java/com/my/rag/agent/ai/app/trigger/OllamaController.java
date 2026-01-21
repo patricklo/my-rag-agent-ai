@@ -46,6 +46,7 @@ public class OllamaController implements AIService {
         return chatClient.stream(new Prompt(message, OllamaOptions.create().withModel(model)));
     }
 
+    @RequestMapping(value = "generate_stream_rag", method = RequestMethod.GET)
     @Override
     public Flux<ChatResponse> generateStreamRag(@RequestParam("model") String model, @RequestParam("ragTag") String ragTag, @RequestParam("message") String message) {
         String SYSTREM_PROMPT = """
